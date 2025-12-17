@@ -50,7 +50,7 @@ Designed for **active incident response** on a potentially compromised host.
 Run the script from an **elevated PowerShell terminal**:
 
 ```powershell
-.\Kerbo_Catch.ps1
+.\kerbo_catch.ps1
 ```
 ## Detection Logic
 
