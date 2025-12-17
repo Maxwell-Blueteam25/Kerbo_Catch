@@ -124,13 +124,6 @@ switch ($userDecision) {
 }
 
 
-if (-Not (Test-Path -Path $csv_Path)) {
-    Write-Host "File not found. Please provide a valid path." -ForegroundColor Red
-    exit
-} elseif ($csv_Path -notlike "*.csv") {
-    Write-Host "Invalid file type. Please provide a CSV file." -ForegroundColor Red
-    exit
-}
 
 $csv = Import-Csv -Path $csv_Path
 
@@ -338,4 +331,5 @@ if ($artifactType -eq "Live") {
     if ($body.Length -gt 0) {
         $body
     }
+
 }
