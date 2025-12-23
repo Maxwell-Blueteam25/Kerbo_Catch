@@ -1,21 +1,31 @@
 # Kerbo_Catch
-# Kerbo_Catch — Active Directory Identity Threat Hunting Engine
 
-Kerbo_Catch is a PowerShell-based threat hunting engine designed to detect high-fidelity Active Directory identity attacks. It ingests Windows Security Logs (either live or via offline CSV export), normalizes the data into a consistent event schema, and applies strict detection logic to identify cryptographic and behavioral anomalies associated with advanced persistent threats.
+**Active Directory Identity Threat Hunting Engine**
+
+Kerbo_Catch is a PowerShell-based threat hunting engine for detecting high-fidelity Active Directory identity attacks. It ingests Windows Security logs (live or offline CSV), normalizes events into a consistent schema, and applies strict detection logic to surface cryptographic and behavioral indicators of identity abuse.
 
 ---
 
 ## Purpose
 
-The purpose of this tool is to identify **identity-based attacks** that often bypass standard signature-based detection. Rather than alerting on raw Event IDs alone, Kerbo_Catch applies operator-grade logic that separates legitimate Active Directory authentication and replication behavior from malicious activity.
+Kerbo_Catch is built to identify identity-based attacks that often evade signature-driven detection. Rather than alerting on Event IDs alone, it evaluates Kerberos metadata, account context, access rights, and behavior to distinguish legitimate domain activity from malicious use.
 
-It focuses on five specific attack vectors:
+---
 
-- **Kerberoasting** (Service Principal Name theft)
-- **AS-REP Roasting** (Pre-authentication disabled accounts)
-- **DCSync** (Domain replication privilege abuse)
-- **Golden Ticket** (Forged TGTs / Mimikatz artifacts)
-- **Persistence** (Privileged group modification)
+## Attack Coverage
+
+Kerbo_Catch focuses on the following identity attack vectors:
+
+- Kerberoasting (SPN abuse)
+    
+- AS-REP Roasting (pre-authentication disabled accounts)
+    
+- DCSync (directory replication abuse)
+    
+- Golden Ticket artifacts (forged TGT indicators)
+    
+- Persistence (privileged group modification)
+    
 
 ---
 
@@ -23,210 +33,131 @@ It focuses on five specific attack vectors:
 
 ### Prerequisites
 
-- **PowerShell 5.1 or higher**
-- **Administrator privileges**  
-  Required for *Live System Triage* to access the Windows Security Event Log.
-- **Domain Controller access**  
-  For best results, run directly on a Domain Controller or analyze logs exported from one.
+- PowerShell 5.1 or higher
+    
+- Administrator privileges (required for live Security log access)
+    
+- Domain Controller access or exported DC Security logs
+    
 
 ---
 
 ## Modes of Operation
 
-Upon launch, the script offers two operating modes:
+Kerbo_Catch supports two modes:
 
-### 1. Import-CSV
-Analyzes offline Windows Security Event logs that have been converted to CSV format.  
-Best suited for **forensic analysis**, evidence review, and historical investigations.
+### Import-CSV
 
-### 2. Live System Triage
+Analyzes offline Windows Security logs exported to CSV.  
+Intended for forensic review and historical analysis.
+
+### Live System Triage
+
 Queries the local Windows Security Event Log in real time.  
-Designed for **active incident response** on a potentially compromised host.
+Designed for active incident response.
 
-Both modes ultimately produce the same normalized event objects, allowing detection logic to remain consistent regardless of data source.
+Both modes produce the same normalized event objects, ensuring identical detection behavior regardless of input source.
 
 ---
 
 ## Execution
 
-Run the script from an **elevated PowerShell terminal**:
+Run from an elevated PowerShell terminal:
 
-```powershell
+```
 .\kerbo_catchV2.ps1
 ```
 
+---
+
 ## Detection Logic
 
-Kerbo_Catch uses **high-signal, operator-grade detection logic** to minimize false positives.  
-It does **not** alert solely on Event IDs; instead, it inspects **Kerberos cryptographic metadata**, **account context**, and **behavioral patterns**.
+Kerbo_Catch uses high-signal, operator-grade logic designed to reduce false positives. Detections are based on protocol misuse and context rather than Event ID presence alone.
+
+### Kerberoasting
+
+- Event: 4769
+    
+- RC4 encryption (0x17)
+    
+- Excludes machine accounts and `krbtgt`
+    
+
+Detects intentional encryption downgrades used for offline password cracking.
+
+### AS-REP Roasting
+
+- Event: 4768
+    
+- PreAuthType 0
+    
+- RC4 encryption
+    
+
+Identifies accounts vulnerable to credential extraction without authentication.
+
+### DCSync
+
+- Event: 4662
+    
+- AccessMask 0x100
+    
+- Excludes machine accounts
+    
+- Validates directory replication GUIDs
+    
+
+Isolates user-initiated replication activity indicative of DCSync abuse.
+
+### Golden Ticket Artifacts
+
+- Events: 4624, 4672, 4769
+    
+- Case-sensitive domain name inspection
+    
+
+Flags lowercase domain artifacts commonly left by forged TGTs.
+
+### Privileged Group Modification
+
+- Events: 4728, 4732, 4756
+    
+- Monitors Domain Admins, Enterprise Admins, Administrators, Schema Admins
+    
+
+Detects persistence via privileged group abuse.
 
 ---
 
-### 1. Kerberoasting
+## Kerbo_Catch v1 vs v2
 
-**Target Event:**
+Kerbo_Catch v2 builds on the original design with improved performance, accuracy, and operational usability.
 
-- `4769` — Kerberos Service Ticket Request
+Key changes:
+
+- Unified normalized event schema across CSV and Live modes
+    
+- Single-pass, stream-based detection using filters and functions
+    
+- Centralized detection logic in `Invoke-DetectionLogic`
+    
+- Improved DC Sync attribution using replication GUIDs
+    
+- Normalized structured output with automatic CSV export
     
 
-**Logic:**
-
-- Excludes machine accounts (names ending in `$`)
-    
-- Excludes the `krbtgt` account
-    
-- Filters for **Ticket Encryption Type `0x17` (RC4-HMAC)**
-    
-
-**Why it works:**  
-Modern Windows domains default to AES encryption. A service ticket request using RC4 from a non-machine account strongly indicates intentional encryption downgrading to enable offline password cracking.
-
----
-
-### 2. AS-REP Roasting
-
-**Target Event:**
-
-- `4768` — Kerberos Authentication Ticket Request
-    
-
-**Logic:**
-
-- Filters for **Pre-Authentication Type `0` (or `0x0`)**
-    
-- Filters for **Ticket Encryption Type `0x17` (RC4)**
-    
-
-**Why it works:**  
-Identifies accounts configured with _“Do not require Kerberos preauthentication.”_ Attackers target these accounts to retrieve crackable authentication material without submitting credentials to the Domain Controller.
-
----
-
-### 3. DCSync
-
-**Target Event:**
-
-- `4662` — Operation Performed on an Object
-    
-
-**Logic:**
-
-- Filters for **Access Mask `0x100` (Control Access)**
-    
-- **Critical filter:** excludes `SubjectUserName` ending in `$`
-    
-
-**Why it works:**  
-Domain Controllers legitimately replicate data using this permission. Excluding machine accounts isolates **user-initiated replication attempts**, a definitive indicator of DCSync abuse (for example, `mimikatz lsadump::dcsync`).
-
----
-
-### 4. Golden Ticket
-
-**Target Events:**
-
-- `4624` — Logon
-    
-- `4672` — Special Logon
-    
-- `4769` — Ticket Request
-    
-
-**Logic:**
-
-- Performs **case-sensitive matching** (`-cmatch`) on `TargetDomainName`
-    
-- Flags domain names containing **lowercase characters** (`[a-z]`)
-    
-
-**Why it works:**  
-Windows authentication normalizes domain names to **UPPERCASE**. Many attack tools allow operators to manually specify the domain name. If entered in lowercase, this artifact persists throughout the authentication chain, exposing a forged TGT.
-
----
-
-### 5. Persistence (Privileged Group Modification)
-
-**Target Events:**
-
-- `4728`, `4732`, `4756` — Member Added to Security Group
-    
-
-**Logic:**
-
-- Monitors additions to:
-    
-    - `Domain Admins`
-        
-    - `Enterprise Admins`
-        
-    - `Administrators`
-        
-    - `Schema Admins`
-        
-
-**Why it works:**  
-Immediate detection of privileged group modification is one of the fastest ways to identify attackers establishing **long-term persistence** after initial compromise.
-
----
-
-## KerboCatch v1 vs v2 (What Changed)
-
-### High-level change
-
-KerboCatch v2 restructures the script into a clean two-stage pipeline:
-
-1. Normalize raw events into a consistent `[PSCustomObject]` schema (shared by both CSV and Live modes).
-    
-2. Apply a dedicated detection stage (`Invoke-DetectionLogic`) that functions as a specialized, reusable `Where-Object`.
-    
-
-### Key differences
-
-#### 1. Unified normalized schema
-
-- **v1:** CSV and Live modes handled parsing and output differently.
-    
-- **v2:** Both modes produce the same normalized object shape (`EventID`, `TimeCreated`, `SrcIP`, `User`, `TargetUser`, `ServiceName`, `Domain`, `Encryption`, `AccessMask`, `PreAuthType`, `Group`) before detection.
-    
-
-#### 2. Streaming detection
-
-- **v1:** CSV mode streamed results, while Live mode accumulated findings before printing.
-    
-- **v2:** Both modes stream detections directly to the console as events are evaluated.
-    
-
-#### 3. Centralized detection logic
-
-- **v1:** Detection logic was partially intertwined with ingestion and mode-specific flow.
-    
-- **v2:** All detections are centralized in `Invoke-DetectionLogic`, making rules easier to extend and maintain.
-    
-
-#### 4. Clear detection-engine structure
-
-- **v1:** Menu-driven triage with parsing and detection mixed together.
-    
-- **v2:** Explicit pipeline: **Ingest → Normalize → Detect**, closely mirroring SIEM and MDR architectures.
-    
-
-#### 5. Same coverage, cleaner execution
-
-- Both versions detect Kerberoasting, AS-REP Roasting, DCSync, Golden Ticket artifacts, and privileged group modification.
-    
-- **v2** improves clarity and reuse by operating exclusively on normalized event objects rather than raw log structures.
-    
+v2 evaluates all detections in one pass over the data, significantly improving performance on large Security logs while reducing false positives.
 
 ---
 
 ## Summary
 
-Kerbo_Catch is designed for defenders who need **high-signal identity threat detection without noise**. By prioritizing cryptographic intent, account context, and protocol abuse, it is especially effective during:
+Kerbo_Catch is designed for defenders who need high-confidence identity threat detection without noise. By focusing on cryptographic intent, access rights, and protocol abuse, it is well suited for:
 
 - Active Directory incident response
     
+- Threat hunting
+    
 - Purple team exercises
     
-- Threat hunting operations
-    
-- Forensic review of Domain Controller security logs
+- Forensic review of Domain Controller Security logs
