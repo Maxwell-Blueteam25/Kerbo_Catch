@@ -327,5 +327,6 @@ if ($Mode -eq 'Live') {
     }
 }
 
-$Date = Get-Date -Format "yyyyMMdd-HHmm"; $detctions | Export-Csv ".\detections_$Date.csv" -NoTypeInformation
+$Date = Get-Date -Format "yyyyMMdd-HHmm"; $detections | Export-Csv ".\detections_$Date.csv" -NoTypeInformation
+
 
