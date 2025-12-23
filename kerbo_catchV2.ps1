@@ -1,6 +1,85 @@
 <#
 .SYNOPSIS
-Unified Security Log Triage (Streaming + Normalized)
+KerboCatch v2: Unified Security log triage (CSV or Live) using a normalized event object stream and a detection filter.
+
+.DESCRIPTION
+KerboCatch v2 is an interactive Security log triage script with two modes:
+
+MODE 1: Import-CSV
+- Prompts for a CSV path and validates it exists.
+- Imports the CSV and expects a JSON "Payload" field containing EventData.
+- Normalizes each row into a single [PSCustomObject] schema (EventID, User, TargetUser, ServiceName, Domain, Encryption, etc.).
+- Pipes each normalized object into Invoke-DetectionLogic for streaming detections.
+
+MODE 2: Live System Triage
+- Prompts for StartDate and EndDate in the format: 'YYYY-MM-DD HH:MM:SS'
+- Queries the local Security event log with Get-WinEvent using a FilterHashtable.
+- Normalizes each event’s XML into the same [PSCustomObject] schema used in CSV mode.
+- Pipes each normalized object into Invoke-DetectionLogic for streaming detections.
+
+DETECTION PIPELINE DESIGN
+This script is intentionally split into two stages:
+1) Normalization stage: build a consistent [PSCustomObject] for every event (same fields in both modes).
+2) Detection stage: Invoke-DetectionLogic (a filter) acts like a specialized Where-Object that evaluates each object and prints findings.
+
+DETECTIONS (Invoke-DetectionLogic)
+1) Kerberoasting (4769)
+   - TicketEncryptionType = 0x17 (heuristic for weak encryption)
+   - Excludes machine accounts (*$), SYSTEM, and krbtgt
+2) DCSync Attempt (4662)
+   - AccessMask = 0x100 and excludes machine accounts (*$)
+3) Golden Ticket Heuristic (4624 / 4672 / 4769)
+   - Flags lowercase letters in Domain (regex [a-z]) as a heuristic indicator
+4) AS-REP Roasting (4768)
+   - PreAuthType = 0 (or 0x0) and TicketEncryptionType = 0x17
+5) Sensitive Group Modification (4728 / 4732 / 4756)
+   - Flags modifications involving: Domain Admins, Enterprise Admins, Administrators
+
+OUTPUT
+- Prints detections to the console as they are identified (streaming).
+- Each detection banner includes key context like Row/RecordId, TimeCreated, Actor/User, TargetUser, ServiceName, SrcIP when available.
+
+.PARAMETER Events
+Not used as a direct parameter in v2. This script is pipeline-driven: normalized objects are piped to Invoke-DetectionLogic.
+
+.PARAMETER csv_Path
+Collected interactively when selecting option 1 (Import-CSV).
+
+.PARAMETER StartDate
+Collected interactively when selecting option 2 (Live System Triage).
+Format: 'YYYY-MM-DD HH:MM:SS'
+
+.PARAMETER EndDate
+Collected interactively when selecting option 2 (Live System Triage).
+Format: 'YYYY-MM-DD HH:MM:SS'
+
+.EXAMPLE
+PS> .\kerbo_catchV2.ps1
+Select option 1, provide a CSV path, stream detections to the console.
+
+.EXAMPLE
+PS> .\kerbo_catchV2.ps1
+Select option 2, provide StartDate/EndDate, triage local Security logs and stream detections.
+
+.NOTES
+CSV MODE EXPECTATIONS (typical columns)
+- EventID
+- TimeCreated
+- RemoteHost (optional)
+- Payload (JSON string containing EventData)
+- RecordNumber (optional, used as Row when present)
+
+LIVE MODE REQUIREMENTS
+- Requires permission to read the local Security event log (often Admin).
+- Time window must be valid; StartDate/EndDate are parsed with Get-Date.
+
+LIMITATIONS / WARNINGS
+- Some checks are heuristic (especially the Golden Ticket lowercase-domain indicator).
+- Field mappings can vary by environment and event schema; validate key fields in your log source if results look off.
+
+.LINK
+https://attack.mitre.org/techniques/T1558/
+https://attack.mitre.org/techniques/T1003/006/
 #>
 
 Write-Host "Select a Security Log Option to Triage: " -ForegroundColor Cyan
@@ -119,4 +198,5 @@ if ($Mode -eq 'Live') {
             Group       = ($_.Message -split "`n")[0] 
         } | Invoke-DetectionLogic
     }
+
 }
